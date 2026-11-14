@@ -1,0 +1,59 @@
+{
+  "mode": "prefetch",
+  "llm": "qwen3:8b",
+  "take": 1,
+  "events": [
+    {
+      "type": "session",
+      "n": 1,
+      "t": 1.975
+    },
+    {
+      "type": "turn",
+      "id": "u1",
+      "session": 1,
+      "said": "Hi! Please remember that my dog is called Biscuit, and I'm flying to Lisbon next month.",
+      "heard": "Hi, please remember that my dog is called Biscuit and I'm flying to Lisbon next month.",
+      "reply": "I've remembered that your dog is called Biscuit and you're flying to Lisbon next month. Have a great trip!",
+      "tools": [
+        "write_memory"
+      ],
+      "tool_args": [
+        "{\"text\":\"User's dog is called Biscuit and they are flying to Lisbon next month.\",\"importance\":0.9}"
+      ],
+      "memory_hits": "",
+      "prefetch_ms": 33.72279996983707,
+      "e2e": 2.4511923789978027,
+      "llm_ttft": 0.0516743001062423,
+      "tts_ttfb": 0.10094949998892844,
+      "user_t": 1.978,
+      "user_dur": 6.45,
+      "agent_t": 10.369,
+      "agent_dur": 7.255
+    },
+    {
+      "type": "session",
+      "n": 2,
+      "t": 22.488
+    },
+    {
+      "type": "turn",
+      "id": "u2",
+      "session": 2,
+      "said": "Hey, where am I flying next month, and what's my dog's name?",
+      "heard": "Hey, where am I flying next month, and what's my dog's name?",
+      "reply": "You're flying to Lisbon next month, and your dog's name is Biscuit.",
+      "tools": [],
+      "tool_args": [],
+      "memory_hits": "{\n  \"id\": \"7aa55a59a1624a66924a8fe6e929eae0\",\n  \"text\": \"User's dog is called Biscuit and they are flying to Lisbon next month.\",\n  \"source_id\": null\n}",
+      "prefetch_ms": 45.72979989461601,
+      "e2e": 1.3321340084075928,
+      "llm_ttft": 0.11917790002189577,
+      "tts_ttfb": 0.05992140015587211,
+      "user_t": 22.49,
+      "user_dur": 4.525,
+      "agent_t": 27.729,
+      "agent_dur": 4.32
+    }
+  ]
+}

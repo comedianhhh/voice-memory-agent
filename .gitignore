@@ -1,0 +1,13 @@
+.env
+.venv/
+servers/.venv/
+servers/*.log
+servers/*.pcm
+servers/*.wav
+__pycache__/
+data/
+notes/
+video/demo.mp4
+video/results-animation.mp4
+video/demo-silent.mp4
+video/*.png

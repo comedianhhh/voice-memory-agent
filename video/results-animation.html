@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Memory Results</title>
+<!--
+  47-second animated explainer for the demo video (1920x1080, dark).
+  Every frame is a pure function of time t, so it can be screen-recorded live
+  or exported frame-by-frame (video/export.py).
+
+  Keys: Space = pause/play, R = restart, ←/→ = seek 1 s.   URL: ?t=23 freezes at 23 s.
+  Numbers come from README "Results" (run bench-20261114-1620).
+-->
+<style>
+  :root {
+    --bg: #111214;
+    --panel: #1b1c1f;
+    --line: #2c2d31;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #8d8c86;
+    --none: #3987e5;      /* categorical slot 1 (dark) */
+    --tool: #d95926;      /* slot 2 */
+    --prefetch: #199e70;  /* slot 3 */
+    --focus: #c98500;     /* slot 4: the one stage we call out */
+    --quiet: #4a4b50;
+  }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #stage {
+    position: absolute; left: 50%; top: 50%;
+    width: 1920px; height: 1080px; transform-origin: center;
+    background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  .scene { position: absolute; inset: 0; opacity: 0; }
+  .abs { position: absolute; }
+  h1 { font-size: 92px; font-weight: 650; margin: 0; letter-spacing: -1.5px; }
+  h2 { font-size: 60px; font-weight: 600; margin: 0; letter-spacing: -0.5px; }
+  .sub { font-size: 34px; color: var(--text-2); }
+  .small { font-size: 26px; color: var(--muted); }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+
+  /* pipeline */
+  .box {
+    position: absolute; width: 230px; height: 150px; border-radius: 18px;
+    background: var(--panel); border: 2px solid var(--line);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 8px;
+  }
+  .box b { font-size: 31px; font-weight: 600; }
+  .box span { font-size: 22px; color: var(--muted); }
+  .arrow { position: absolute; height: 3px; background: var(--quiet); }
+  .pulse { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: var(--text);
+           box-shadow: 0 0 24px 6px rgba(240,239,236,.45); }
+
+  /* mode cards */
+  .card {
+    position: absolute; width: 480px; height: 330px; border-radius: 22px; background: var(--panel);
+    border: 2px solid var(--line); padding: 40px 44px; box-sizing: border-box;
+  }
+  .card .tag { display: inline-flex; align-items: center; gap: 14px; font-size: 40px; font-weight: 650; }
+  .dot { width: 22px; height: 22px; border-radius: 50%; display: inline-block; }
+  .card p { font-size: 29px; color: var(--text-2); line-height: 1.4; margin: 26px 0 0; }
+
+  /* bars */
+  .row-label { position: absolute; font-size: 36px; font-weight: 600; display: flex; align-items: center; gap: 14px; }
+  .bar { position: absolute; height: 74px; border-radius: 0 6px 6px 0; }
+  .val { position: absolute; font-size: 38px; font-weight: 650; white-space: nowrap; }
+  .val em { font-style: normal; font-weight: 500; color: var(--text-2); font-size: 30px; }
+  .acc { position: absolute; font-size: 36px; font-weight: 650; white-space: nowrap; }
+  .grid { position: absolute; width: 1px; background: var(--line); }
+  .tick { position: absolute; font-size: 22px; color: var(--muted); transform: translateX(-50%); }
+
+  .seg { position: absolute; height: 120px; }
+  .seg-label { position: absolute; font-size: 28px; color: var(--text-2); white-space: nowrap; }
+
+  .take { position: absolute; left: 200px; font-size: 46px; display: flex; align-items: center; gap: 22px; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <!-- 1. title -->
+  <div class="scene" id="s1">
+    <div class="abs" style="left:200px; top:380px">
+      <h1 id="s1-title">A voice assistant that remembers you</h1>
+      <div class="sub" id="s1-sub" style="margin-top:28px">Runs on one desktop GPU &nbsp;·&nbsp; no paid APIs &nbsp;·&nbsp; memory over MCP</div>
+    </div>
+  </div>
+
+  <!-- 2. pipeline -->
+  <div class="scene" id="s2">
+    <h2 class="abs" style="left:200px; top:140px">How a turn flows</h2>
+    <div id="pipe"></div>
+    <div class="box" id="mem" style="left:1040px; top:690px; width:390px; height:150px">
+      <b>memory-service</b><span>Postgres + pgvector · hybrid search</span>
+    </div>
+    <div class="abs small" id="mcp" style="left:1110px; top:620px">MCP (stdio)</div>
+    <div class="arrow" id="mem-link" style="left:1235px; top:560px; width:3px; height:130px"></div>
+  </div>
+
+  <!-- 3. modes -->
+  <div class="scene" id="s3">
+    <h2 class="abs" style="left:200px; top:150px">What does memory cost a spoken turn?</h2>
+    <div class="abs sub" style="left:200px; top:240px">Same pipeline, three ways to read memory</div>
+    <div class="card" id="c-none" style="left:200px; top:400px">
+      <div class="tag"><i class="dot" style="background:var(--none)"></i>No memory</div>
+      <p>Baseline. Fast, but can't answer anything about you.</p>
+    </div>
+    <div class="card" id="c-tool" style="left:720px; top:400px">
+      <div class="tag"><i class="dot" style="background:var(--tool)"></i>Tool call</div>
+      <p>The LLM decides to call <span class="mono">search_memory</span>, then answers. Two LLM rounds.</p>
+    </div>
+    <div class="card" id="c-pre" style="left:1240px; top:400px">
+      <div class="tag"><i class="dot" style="background:var(--prefetch)"></i>Prefetch</div>
+      <p>Search memory before the LLM on every turn. One LLM round.</p>
+    </div>
+  </div>
+
+  <!-- 4. recall results -->
+  <div class="scene" id="s4">
+    <h2 class="abs" style="left:200px; top:120px">"What's my dog's name?"</h2>
+    <div class="abs sub" style="left:200px; top:205px">Recall questions · 24 spoken turns per mode · time until the agent starts talking (median)</div>
+    <div id="axis"></div>
+    <div id="bars"></div>
+    <div class="abs small" style="left:1580px; top:330px">correct</div>
+  </div>
+
+  <!-- 5. where time goes -->
+  <div class="scene" id="s5">
+    <h2 class="abs" style="left:200px; top:140px">Where the time goes</h2>
+    <div class="abs sub" style="left:200px; top:225px">One turn without memory, median of each stage (ms)</div>
+    <div id="segs"></div>
+    <div class="abs" id="callout" style="left:200px; top:720px; font-size:58px; font-weight:650">
+      <span style="color:var(--focus)">~80%</span> is deciding you've stopped talking.
+    </div>
+    <div class="abs sub" id="callout2" style="left:200px; top:810px">Memory and the LLM are not the bottleneck. Turn-taking is.</div>
+  </div>
+
+  <!-- 6. takeaways -->
+  <div class="scene" id="s6">
+    <h2 class="abs" style="left:200px; top:180px">Takeaways</h2>
+    <div class="take" id="t1" style="top:340px"><i class="dot" style="background:var(--prefetch)"></i><span><b>Prefetch:</b> +39 ms, 24/24 correct</span></div>
+    <div class="take" id="t2" style="top:440px"><i class="dot" style="background:var(--tool)"></i><span><b>Tool call:</b> +325 ms, 22/24 correct</span></div>
+    <div class="take" id="t3" style="top:540px"><i class="dot" style="background:var(--focus)"></i><span><b>Next:</b> faster end-of-turn detection</span></div>
+    <div class="abs small" id="credits" style="left:200px; top:900px">LiveKit Agents · faster-whisper · qwen3:8b on Ollama · Kokoro · MCP · RTX 4080 SUPER</div>
+  </div>
+</div>
+
+<script>
+const DURATION = 47;
+const SCENES = { s1: [0, 5.5], s2: [5, 15.5], s3: [15, 22.5], s4: [22, 33.5], s5: [33, 41.5], s6: [41, 47] };
+
+const clamp = (x) => Math.max(0, Math.min(1, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = (x) => 1 - Math.pow(1 - x, 3);
+const $ = (id) => document.getElementById(id);
+function show(el, p, dy = 30) {           // fade + rise, p in 0..1
+  const e = ease(p);
+  el.style.opacity = e;
+  el.style.transform = `translateY(${(1 - e) * dy}px)`;
+}
+
+/* ---------- build: pipeline ---------- */
+const PIPE = [
+  ["Mic", "you speak"],
+  ["Turn detection", "VAD + turn model"],
+  ["Whisper", "speech → text"],
+  ["qwen3:8b", "LLM on Ollama"],
+  ["Kokoro", "text → speech"],
+  ["Speaker", "agent replies"],
+];
+const PX0 = 200, PW = 230, PGAP = 34, PY = 410;
+const pipe = $("pipe");
+PIPE.forEach(([b, s], i) => {
+  const d = document.createElement("div");
+  d.className = "box"; d.id = "p" + i;
+  d.style.left = PX0 + i * (PW + PGAP) + "px"; d.style.top = PY + "px";
+  d.innerHTML = `<b>${b}</b><span>${s}</span>`;
+  pipe.appendChild(d);
+  if (i < PIPE.length - 1) {
+    const a = document.createElement("div");
+    a.className = "arrow"; a.id = "a" + i;
+    a.style.left = PX0 + i * (PW + PGAP) + PW + "px"; a.style.top = PY + 74 + "px"; a.style.width = PGAP + "px";
+    pipe.appendChild(a);
+  }
+});
+const pulse = document.createElement("div"); pulse.className = "pulse"; pipe.appendChild(pulse);
+// LLM box (index 3) center x = 200 + 3*264 + 115 = 1107; memory link drawn under it
+$("mem").style.left = (PX0 + 3 * (PW + PGAP) + PW / 2 - 195) + "px";
+$("mem-link").style.left = (PX0 + 3 * (PW + PGAP) + PW / 2 - 1) + "px";
+$("mcp").style.left = (PX0 + 3 * (PW + PGAP) + PW / 2 + 20) + "px";
+
+/* ---------- build: recall bars ---------- */
+const MODES = [
+  { key: "none", label: "No memory", ms: 1175, delta: null, acc: "0 / 24" },
+  { key: "tool", label: "Tool call", ms: 1500, delta: 325, acc: "22 / 24" },
+  { key: "prefetch", label: "Prefetch", ms: 1214, delta: 39, acc: "24 / 24" },
+];
+const BX = 560, BW = 800, BMAX = 2000, BY0 = 400, BSTEP = 150;   // x-scale: 0..2000 ms over 800 px
+const xs = (ms) => BX + (ms / BMAX) * BW;
+const axis = $("axis");
+[0, 500, 1000, 1500, 2000].forEach((v) => {
+  const g = document.createElement("div"); g.className = "grid";
+  g.style.left = xs(v) + "px"; g.style.top = BY0 - 30 + "px"; g.style.height = BSTEP * 3 + "px";
+  axis.appendChild(g);
+  const tk = document.createElement("div"); tk.className = "tick";
+  tk.style.left = xs(v) + "px"; tk.style.top = BY0 - 30 + BSTEP * 3 + 12 + "px"; tk.textContent = v + " ms";
+  axis.appendChild(tk);
+});
+const bars = $("bars");
+MODES.forEach((m, i) => {
+  const y = BY0 + i * BSTEP;
+  bars.insertAdjacentHTML("beforeend", `
+    <div class="row-label" id="bl-${m.key}" style="left:200px; top:${y + 14}px">
+      <i class="dot" style="background:var(--${m.key})"></i>${m.label}</div>
+    <div class="bar" id="b-${m.key}" style="left:${BX}px; top:${y}px; background:var(--${m.key})"></div>
+    <div class="val" id="v-${m.key}" style="top:${y + 12}px"></div>
+    <div class="acc" id="ac-${m.key}" style="left:1580px; top:${y + 12}px">${m.acc}</div>`);
+});
+
+/* ---------- build: stage breakdown ---------- */
+const STAGES = [
+  { label: "end of turn", ms: 935, color: "var(--focus)" },
+  { label: "LLM first token", ms: 32, color: "var(--quiet)" },
+  { label: "TTS first audio", ms: 118, color: "#6a6b70" },
+  { label: "other", ms: 63, color: "#3a3b40" },
+];
+const SX = 200, SW = 1520, STOTAL = 1148, SY = 400;
+const segs = $("segs");
+let acc = 0;
+STAGES.forEach((s, i) => {
+  const left = SX + (acc / STOTAL) * SW, w = (s.ms / STOTAL) * SW - 2;   // 2px surface gap
+  segs.insertAdjacentHTML("beforeend", `
+    <div class="seg" id="sg${i}" style="left:${left}px; top:${SY}px; width:${w}px; background:${s.color};
+         border-radius:${i === 0 ? "6px 0 0 6px" : i === STAGES.length - 1 ? "0 6px 6px 0" : "0"}"></div>`);
+  s.left = left; s.w = w; acc += s.ms;
+});
+// labels: the big one inside, the three small ones above/below with leader-free offsets
+segs.insertAdjacentHTML("beforeend", `
+  <div class="seg-label" id="sl0" style="left:${SX + 30}px; top:${SY + 38}px; color:#111214; font-size:36px; font-weight:650">end of turn · 935</div>
+  <div class="seg-label" id="sl1" style="left:${STAGES[1].left - 60}px; top:${SY - 52}px">LLM 32</div>
+  <div class="seg-label" id="sl2" style="left:${STAGES[2].left}px; top:${SY + 136}px">TTS 118</div>
+  <div class="seg-label" id="sl3" style="left:${STAGES[3].left - 10}px; top:${SY - 52}px">other 63</div>
+  <div class="seg-label" id="slt" style="left:${SX + SW - 230}px; top:${SY + 190}px; font-size:32px; color:var(--text)">total ≈ 1,148 ms</div>`);
+
+/* ---------- render(t): every frame from t alone ---------- */
+function render(t) {
+  for (const [id, [a, b]] of Object.entries(SCENES)) {
+    const o = Math.min(seg(t, a, a + 0.5), 1 - seg(t, b - 0.5, b));
+    $(id).style.opacity = o;
+    $(id).style.visibility = o > 0 ? "visible" : "hidden";
+  }
+
+  // 1 title
+  show($("s1-title"), seg(t, 0.3, 1.3));
+  show($("s1-sub"), seg(t, 1.0, 2.0));
+
+  // 2 pipeline: boxes appear one by one, then a pulse travels along, dipping into memory at the LLM
+  PIPE.forEach((_, i) => show($("p" + i), seg(t, 5.4 + i * 0.45, 5.9 + i * 0.45), 20));
+  for (let i = 0; i < PIPE.length - 1; i++) $("a" + i).style.opacity = seg(t, 5.7 + i * 0.45, 6.1 + i * 0.45);
+  show($("mem"), seg(t, 8.4, 9.0), 20);
+  $("mem-link").style.opacity = seg(t, 8.6, 9.0);
+  $("mcp").style.opacity = seg(t, 8.8, 9.3);
+  const pp = seg(t, 9.6, 14.6);
+  const cx = (i) => PX0 + i * (PW + PGAP) + PW / 2 - 11;
+  let px, py = PY + 64;
+  if (pp < 0.5) {                      // mic -> LLM
+    px = cx(0) + (cx(3) - cx(0)) * (pp / 0.5);
+  } else if (pp < 0.7) {               // down into memory and back up
+    px = cx(3);
+    const k = (pp - 0.5) / 0.2;
+    py = PY + 64 + Math.sin(k * Math.PI) * 300;
+  } else {                             // LLM -> speaker
+    px = cx(3) + (cx(5) - cx(3)) * ((pp - 0.7) / 0.3);
+  }
+  pulse.style.left = px + "px"; pulse.style.top = py + "px";
+  pulse.style.opacity = pp > 0 && pp < 1 ? 1 : 0;
+
+  // 3 mode cards
+  show($("c-none"), seg(t, 15.8, 16.5));
+  show($("c-tool"), seg(t, 16.6, 17.3));
+  show($("c-pre"), seg(t, 17.4, 18.1));
+
+  // 4 bars grow, values count up, then accuracy
+  MODES.forEach((m, i) => {
+    const g = ease(seg(t, 23.0 + i * 0.9, 24.6 + i * 0.9));
+    const w = (m.ms / BMAX) * BW * g;
+    const bar = $("b-" + m.key);
+    bar.style.width = w + "px";
+    const v = $("v-" + m.key);
+    v.style.left = BX + w + 18 + "px";
+    v.style.opacity = g > 0.02 ? 1 : 0;
+    const shown = Math.round(m.ms * g);
+    const deltaP = seg(t, 27.6, 28.3);
+    v.innerHTML = `${shown.toLocaleString("en-US")} ms` +
+      (m.delta != null ? ` <em style="opacity:${deltaP}">(+${m.delta})</em>` : "");
+    show($("bl-" + m.key), seg(t, 22.4 + i * 0.2, 22.9 + i * 0.2), 10);
+    show($("ac-" + m.key), seg(t, 29.0 + i * 0.6, 29.6 + i * 0.6), 10);
+  });
+
+  // 5 stage breakdown: segments fill left to right, then the callout
+  let tt = 33.8;
+  STAGES.forEach((s, i) => {
+    const d = Math.max(0.35, (s.ms / STOTAL) * 2.4);
+    const g = ease(seg(t, tt, tt + d));
+    $("sg" + i).style.width = s.w * g + "px";
+    $("sl" + i).style.opacity = seg(t, tt + d * 0.6, tt + d + 0.2);
+    tt += d;
+  });
+  $("slt").style.opacity = seg(t, tt, tt + 0.4);
+  show($("callout"), seg(t, 37.4, 38.1));
+  show($("callout2"), seg(t, 38.4, 39.1));
+
+  // 6 takeaways
+  show($("t1"), seg(t, 41.6, 42.2));
+  show($("t2"), seg(t, 42.3, 42.9));
+  show($("t3"), seg(t, 43.0, 43.6));
+  $("credits").style.opacity = seg(t, 43.8, 44.6);
+}
+
+/* ---------- fit 1920x1080 into the window ---------- */
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  $("stage").style.transform = `translate(-50%, -50%) scale(${s})`;
+}
+addEventListener("resize", fit); fit();
+
+/* ---------- playback ---------- */
+const frozen = new URLSearchParams(location.search).get("t");
+let t0 = performance.now(), paused = false, pausedAt = 0;
+window.renderAt = (t) => { paused = true; render(t); };   // used by export.py
+window.DURATION = DURATION;
+function loop(now) {
+  if (!paused) {
+    const t = ((now - t0) / 1000) % DURATION;
+    render(t);
+  }
+  requestAnimationFrame(loop);
+}
+if (frozen !== null) { paused = true; render(parseFloat(frozen)); }
+else requestAnimationFrame(loop);
+
+addEventListener("keydown", (e) => {
+  const now = performance.now();
+  const cur = paused ? pausedAt : ((now - t0) / 1000) % DURATION;
+  if (e.code === "Space") {
+    if (paused) { t0 = now - pausedAt * 1000; paused = false; }
+    else { pausedAt = cur; paused = true; }
+  } else if (e.key === "r" || e.key === "R") { t0 = now; paused = false; }
+  else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    const nt = Math.max(0, Math.min(DURATION - 0.01, cur + (e.key === "ArrowRight" ? 1 : -1)));
+    if (paused) { pausedAt = nt; render(nt); } else t0 = now - nt * 1000;
+  }
+});
+</script>
+</body>
+</html>

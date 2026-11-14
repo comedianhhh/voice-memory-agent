@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Memory Demo</title>
+<!--
+  The live-demo half of the video, drawn from a REAL recorded run (video/demo/timeline.json,
+  made by demo_record.py). Every text, tool call, memory hit and latency shown here is what the
+  agent actually did; only the user's voice is synthesized. Timing: video/demo/schedule.js,
+  written by export_demo.py from the recording, so pictures and audio share one clock.
+
+  Keys: Space = pause/play, R = restart, ←/→ = seek 1 s.   URL: ?t=12 freezes at 12 s.
+-->
+<style>
+  :root {
+    --bg: #111214; --panel: #1b1c1f; --line: #2c2d31;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8d8c86;
+    --user: #3987e5; --mem: #199e70; --focus: #c98500;
+  }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px;
+           transform-origin: center; background: var(--bg); color: var(--text); overflow: hidden;
+           font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .abs { position: absolute; }
+  .layer { position: absolute; inset: 0; }
+  h1 { font-size: 84px; font-weight: 650; margin: 0; letter-spacing: -1.5px; }
+  .sub { font-size: 34px; color: var(--text-2); }
+  .pill { display: inline-flex; align-items: center; gap: 12px; padding: 8px 20px; border-radius: 999px;
+          background: var(--panel); border: 2px solid var(--line); font-size: 24px; color: var(--text-2); }
+  .live { width: 12px; height: 12px; border-radius: 50%; background: #e66767; }
+  .session { font-size: 40px; font-weight: 600; }
+  .session span { color: var(--muted); font-weight: 400; font-size: 30px; margin-left: 16px; }
+
+  .bubble { position: absolute; max-width: 1080px; padding: 26px 34px; border-radius: 28px; font-size: 38px;
+            line-height: 1.35; box-sizing: border-box; }
+  .bubble .who { font-size: 22px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted);
+                 margin-bottom: 10px; font-weight: 600; }
+  .user { right: 240px; background: #1d2a3d; border: 2px solid #2c4a75; border-bottom-right-radius: 8px; }
+  .agent { left: 240px; background: var(--panel); border: 2px solid var(--line); border-bottom-left-radius: 8px; }
+  .chip { position: absolute; left: 240px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; font-size: 28px;
+          color: var(--text-2); padding: 14px 24px; border-radius: 14px; border: 2px dashed #1f6f53;
+          background: rgba(25,158,112,0.08); max-width: 1300px; }
+  .chip b { color: var(--mem); font-family: Consolas, "Cascadia Mono", monospace; font-weight: 600; }
+  .status { position: absolute; left: 240px; font-size: 30px; color: var(--muted); display: flex; gap: 14px; align-items: baseline; }
+  .status .ms { color: var(--focus); font-weight: 650; font-variant-numeric: tabular-nums; font-size: 34px; }
+  .wave { display: inline-flex; gap: 6px; align-items: center; height: 40px; }
+  .wave i { width: 6px; border-radius: 3px; background: var(--user); display: inline-block; }
+  .foot { position: absolute; left: 240px; bottom: 50px; font-size: 24px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <!-- intro -->
+  <div class="layer" id="intro">
+    <div class="abs" style="left:240px; top:360px">
+      <div class="pill"><i class="live"></i>Live run · real pipeline</div>
+      <h1 style="margin-top:34px">Tell it something. Close it. Ask again.</h1>
+      <div class="sub" style="margin-top:24px">Two separate sessions. The only thing they share is long-term memory.</div>
+    </div>
+  </div>
+
+  <!-- conversation -->
+  <div class="layer" id="conv">
+    <div class="abs session" id="sess" style="left:240px; top:90px"></div>
+    <div class="abs pill" style="right:240px; top:92px"><i class="live"></i>live run</div>
+    <div id="chat"></div>
+    <div class="foot">Real run on one RTX 4080 SUPER · qwen3:8b on Ollama · Whisper · Kokoro · memory over MCP · the user's voice is synthesized</div>
+  </div>
+
+  <!-- session switch -->
+  <div class="layer" id="switch">
+    <div class="abs" style="left:240px; top:400px">
+      <h1>New session</h1>
+      <div class="sub" style="margin-top:24px">Chat history is gone. Only what was written to memory remains.</div>
+    </div>
+  </div>
+</div>
+
+<script src="demo/schedule.js"></script>
+<script>
+const D = window.DEMO;              // {duration, intro_end, switch:[a,b], turns:[...]}
+const $ = (id) => document.getElementById(id);
+const clamp = (x) => Math.max(0, Math.min(1, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = (x) => 1 - Math.pow(1 - x, 3);
+const fade = (t, a, b, f = 0.4) => Math.min(seg(t, a, a + f), 1 - seg(t, b - f, b));
+
+/* layout of each turn's elements, top to bottom inside its session */
+const chat = $("chat");
+D.turns.forEach((tn, i) => {
+  const userTop = 230, statusTop = 462, chipTop = 525, agentTop = 690;
+  chat.insertAdjacentHTML("beforeend", `
+    <div class="bubble user" id="ub${i}" style="top:${userTop}px"><div class="who">user · heard by Whisper</div><span id="ut${i}"></span>
+      <span class="wave" id="uw${i}">${"<i></i>".repeat(5)}</span></div>
+    <div class="chip" id="ch${i}" style="top:${chipTop}px">${tn.chip_html.replaceAll("<br>", "")}</div>
+    <div class="status" id="st${i}" style="top:${statusTop}px"><span id="stl${i}">thinking</span><span class="ms" id="stm${i}"></span></div>
+    <div class="bubble agent" id="ab${i}" style="top:${agentTop}px"><div class="who">agent</div><span id="at${i}"></span></div>`);
+});
+
+function words(text, p) {               // reveal text word by word, p in 0..1
+  const w = text.split(" ");
+  return w.slice(0, Math.ceil(w.length * clamp(p))).join(" ");
+}
+
+function render(t) {
+  $("intro").style.opacity = fade(t, 0, D.intro_end, 0.5);
+  $("switch").style.opacity = fade(t, D.switch[0], D.switch[1], 0.5);
+  const inConv = t > D.intro_end - 0.4 && !(t > D.switch[0] + 0.4 && t < D.switch[1] - 0.4) && t < D.duration;
+  $("conv").style.opacity = inConv ? Math.min(seg(t, D.intro_end - 0.4, D.intro_end + 0.1),
+                                               1 - seg(t, D.switch[0], D.switch[0] + 0.4) + seg(t, D.switch[1] - 0.4, D.switch[1])) : 0;
+
+  const cur = D.turns.findIndex((tn) => t >= tn.session_start && t < tn.session_end);
+  $("sess").innerHTML = cur >= 0 ? D.turns[cur].session_label : "";
+
+  D.turns.forEach((tn, i) => {
+    const on = i === cur;
+    const els = ["ub", "ch", "st", "ab"].map((k) => $(k + i));
+    if (!on) { els.forEach((e) => (e.style.opacity = 0)); return; }
+
+    // user bubble: appears when speech starts, words follow the audio
+    const up = seg(t, tn.user_v, tn.user_end_v);
+    $("ub" + i).style.opacity = ease(seg(t, tn.user_v - 0.3, tn.user_v));
+    $("ut" + i).textContent = words(tn.heard, up * 1.05);
+    const talking = t >= tn.user_v && t < tn.user_end_v;
+    $("uw" + i).style.display = talking ? "inline-flex" : "none";
+    [...$("uw" + i).children].forEach((bar, k) => {
+      bar.style.height = 10 + 26 * Math.abs(Math.sin(t * 9 + k * 1.3)) + "px";
+    });
+
+    // waiting: a live counter from when the user stopped speaking until audio starts
+    const waiting = t >= tn.stop_v && t < tn.agent_v;
+    const elapsed = Math.min(t, tn.agent_v) - tn.stop_v;
+    $("st" + i).style.opacity = t >= tn.stop_v ? 1 : 0;
+    if (t >= tn.stop_v) {
+      $("stl" + i).textContent = waiting ? "thinking…" : "answered after";
+      $("stm" + i).textContent = (Math.max(0, elapsed)).toFixed(2) + " s";
+    }
+
+    // memory chip: what memory did on this turn (shown once, while the agent works)
+    $("ch" + i).style.opacity = ease(seg(t, tn.chip_v, tn.chip_v + 0.3));
+
+    // agent bubble: words follow its audio
+    $("ab" + i).style.opacity = ease(seg(t, tn.agent_v - 0.05, tn.agent_v + 0.25));
+    $("at" + i).textContent = words(tn.reply, seg(t, tn.agent_v, tn.agent_end_v) * 1.05);
+  });
+}
+
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  $("stage").style.transform = `translate(-50%, -50%) scale(${s})`;
+}
+addEventListener("resize", fit); fit();
+
+const frozen = new URLSearchParams(location.search).get("t");
+let t0 = performance.now(), paused = false, pausedAt = 0;
+window.renderAt = (t) => { paused = true; render(t); };
+window.DURATION = D.duration;
+function loop(now) { if (!paused) render(((now - t0) / 1000) % D.duration); requestAnimationFrame(loop); }
+if (frozen !== null) { paused = true; render(parseFloat(frozen)); } else requestAnimationFrame(loop);
+addEventListener("keydown", (e) => {
+  const now = performance.now(), cur = paused ? pausedAt : ((now - t0) / 1000) % D.duration;
+  if (e.code === "Space") { if (paused) { t0 = now - pausedAt * 1000; paused = false; } else { pausedAt = cur; paused = true; } }
+  else if (e.key === "r" || e.key === "R") { t0 = now; paused = false; }
+  else if (e.key.startsWith("Arrow")) {
+    const nt = Math.max(0, Math.min(D.duration - 0.01, cur + (e.key === "ArrowRight" ? 1 : -1)));
+    if (paused) { pausedAt = nt; render(nt); } else t0 = now - nt * 1000;
+  }
+});
+</script>
+</body>
+</html>
