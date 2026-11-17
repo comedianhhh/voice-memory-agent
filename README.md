@@ -91,6 +91,43 @@ Caveats: a single machine, synthetic voice for the user, 24 turns per cell (p95 
 turn). TTS first-audio time depends on the length of the reply's first sentence, so it varies
 with what the model says.
 
+## Phone calls
+
+The same agent can answer a phone number through [LiveKit Cloud](https://livekit.com/pricing)
+telephony. The free Build plan includes one US local number and 50 inbound minutes, with no card
+on file. Only the call audio goes through LiveKit: STT, LLM, TTS and memory still run on this
+machine, and the worker connects out to LiveKit, so no ports are opened.
+
+- **Memory follows the caller.** Each caller number gets its own memory-service account, created on
+  the first call (`caller_account` in `agent.py`), so RLS keeps one caller's memories away from
+  another's. Logs carry a SHA-256 hash of the number, never the number itself.
+- **Every call is logged.** At hang-up, `data/calls/<id>.json` gets the duration and the full
+  transcript. Per-turn latency for the same call goes to `data/turns.jsonl` under the call id.
+- **Phone settings.** Calls use prefetch mode (the benchmark winner), plus a phone rule: audio is
+  narrowband, so ask the caller to repeat what wasn't caught.
+
+**Simulated test** (`phone_sim.py`, no phone line). This runs the real phone code path. The caller
+is a synthesized voice squeezed to phone quality (8 kHz, 300–3400 Hz) and played into the live
+pipeline. Caller A states two facts and hangs up, then calls back and asks for them. Caller B, on
+another number, asks the same questions.
+
+| call | asked | agent said | check |
+|---|---|---|---|
+| A, call back | "What's my sister's name?" | "Your sister's name is Lena." | ✅ |
+| A, call back | "What am I allergic to?" | "You're allergic to shellfish." | ✅ |
+| B, new number | "What's my sister's name?" | "I don't remember yet. …" | ✅ isolated |
+| B, new number | "What am I allergic to?" | "I don't remember yet. …" | ✅ isolated |
+
+Whisper transcribed every phone-band line correctly. End-to-end p50 was 1,145 ms over 9 turns, in
+line with the benchmark. The slowest turn (2,978 ms) was the first one, where end-of-turn
+detection alone took 2.5 s: endpointing again, not the model. Raw records:
+[`results/phone-sim-20261116.jsonl`](results/phone-sim-20261116.jsonl). Not yet tested over a real
+LiveKit number: the SIP leg, the dispatch rule, and reading `sip.phoneNumber` in `entrypoint`.
+
+To go live: create a LiveKit Cloud project and put its `LIVEKIT_*` keys in `.env` (see
+`.env.example`). Then claim the free number and add a dispatch rule that sends calls to the agent
+named `voice-memory-agent`. Start everything with `.\start.ps1 -Phone`.
+
 ## How the benchmark works
 
 `bench.py` doesn't use a microphone. A fake mic (`ScriptedMic`) plays pre-synthesized questions
@@ -110,6 +147,8 @@ and is logged per turn to `data/*.jsonl`.
 uv run memory_test.py tool        # text-only check: remember in one session, recall in another
 uv run bench.py --passes 2        # benchmark all modes -> data/bench.jsonl
 uv run stats.py                   # p50/p95 tables -> data/results.md
+uv run phone_sim.py               # 3 simulated phone calls: recall on call-back + caller isolation
+.\start.ps1 -Phone                # answer real calls to your LiveKit number (LIVEKIT_* in .env)
 ```
 
 The demo video is generated, not screen-recorded. `video/demo_record.py` runs the real

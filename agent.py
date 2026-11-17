@@ -15,6 +15,12 @@ Run (talk through your mic/speakers, no LiveKit server needed):
 
 Every turn's latency goes to data/turns.jsonl (see turn_logger).
 
+Phone calls (LiveKit Cloud, free Build plan: one US number, inbound only):
+  uv run agent.py dev                # registers as AGENT_NAME with LiveKit Cloud (LIVEKIT_* in .env)
+  Calls reach this machine through LiveKit; STT, LLM and TTS still run locally. Each caller
+  number gets its own memory-service account (data/callers.json, keyed by a hash of the
+  number), so memory follows the caller across calls. Each call is written to data/calls/.
+
 Always use 127.0.0.1, not localhost: on Windows "localhost" tries IPv6 first and each
 request to an IPv4-only server (Ollama) loses ~2 s. Measured 2026-11-14: LLM time-to-first-token
 2.4 s with localhost, ~0.1 s with 127.0.0.1.
@@ -23,9 +29,11 @@ request to an IPv4-only server (Ollama) loses ~2 s. Measured 2026-11-14: LLM tim
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import secrets
 import time
 import urllib.request
 from pathlib import Path
@@ -43,6 +51,7 @@ from livekit.agents import (
     llm,
     mcp,
 )
+from livekit import rtc
 from livekit.plugins import openai, silero
 from livekit.plugins.turn_detector.english import EnglishModel
 from mcp.client.stdio import get_default_environment
@@ -59,6 +68,11 @@ MEMORY_MODE = os.getenv("MEMORY_MODE", "tool")  # tool | prefetch | none
 MEMORY_SERVICE_DIR = os.getenv("MEMORY_SERVICE_DIR", str(ROOT.parent / "memory-service"))
 TURNS_LOG = Path(os.getenv("TURNS_LOG", ROOT / "data" / "turns.jsonl"))
 PREFETCH_K = 3
+AGENT_NAME = os.getenv("AGENT_NAME", "voice-memory-agent")  # dispatch rule targets this name
+PHONE_MEMORY_MODE = os.getenv("PHONE_MEMORY_MODE", "prefetch")  # won the benchmark: 24/24, +39 ms
+MEMORY_API_URL = os.getenv("MEMORY_API_URL", "http://127.0.0.1:8000")
+CALLERS_FILE = ROOT / "data" / "callers.json"
+CALLS_DIR = ROOT / "data" / "calls"
 
 BASE = """You are a friendly voice assistant with long-term memory. Your replies are spoken aloud, so:
 - keep them to one or two short sentences,
@@ -81,25 +95,52 @@ INSTRUCTIONS = {
 }
 
 
-def memory_server() -> mcp.MCPServerStdio:
+def memory_server(creds: tuple[str, str] | None = None) -> mcp.MCPServerStdio:
     """memory-service's MCP server over stdio, run with memory-service's own venv.
 
     It calls the memory-service HTTP API as a normal logged-in user, so RLS keeps each
-    user's memories separate. Credentials come from .env (a local test account).
+    user's memories separate. Credentials: the caller's own account on a phone call,
+    otherwise the local test account in .env.
     """
+    email, password = creds or (os.environ["MEMORY_EMAIL"], os.environ["MEMORY_PASSWORD"])
     py = Path(MEMORY_SERVICE_DIR) / ".venv" / "Scripts" / "python.exe"
     env = get_default_environment() | {
-        "MEMORY_API_URL": os.getenv("MEMORY_API_URL", "http://127.0.0.1:8000"),
-        "MEMORY_EMAIL": os.environ["MEMORY_EMAIL"],
-        "MEMORY_PASSWORD": os.environ["MEMORY_PASSWORD"],
+        "MEMORY_API_URL": MEMORY_API_URL,
+        "MEMORY_EMAIL": email,
+        "MEMORY_PASSWORD": password,
     }
     # first search loads the embedding model, so allow more than the 5 s default
     return mcp.MCPServerStdio(str(py), ["-m", "memory_service.mcp_server"], env=env,
                               cwd=MEMORY_SERVICE_DIR, client_session_timeout_seconds=20)
 
 
-def memory_tools() -> mcp.MCPToolset:
-    return mcp.MCPToolset(id="memory", mcp_server=memory_server())
+def memory_tools(creds: tuple[str, str] | None = None) -> mcp.MCPToolset:
+    return mcp.MCPToolset(id="memory", mcp_server=memory_server(creds))
+
+
+def caller_id(number: str) -> str:
+    """Stable, non-reversible id for a phone number; raw numbers never reach the logs."""
+    return hashlib.sha256(number.encode()).hexdigest()[:12]
+
+
+def caller_account(number: str) -> tuple[str, str]:
+    """The memory-service account for this caller, created on their first call.
+
+    These are machine-generated accounts on the local memory API (not anyone's real login);
+    data/callers.json is gitignored."""
+    cid = caller_id(number)
+    accounts = json.loads(CALLERS_FILE.read_text()) if CALLERS_FILE.exists() else {}
+    if cid not in accounts:
+        email, pw = f"caller-{cid}@phone.local", secrets.token_urlsafe(18)
+        body = json.dumps({"email": email, "password": pw}).encode()
+        req = urllib.request.Request(f"{MEMORY_API_URL}/auth/register", body,
+                                     {"content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).close()
+        accounts[cid] = {"email": email, "password": pw, "created": time.time()}
+        CALLERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CALLERS_FILE.write_text(json.dumps(accounts, indent=2))
+    a = accounts[cid]
+    return a["email"], a["password"]
 
 
 def _ollama_keep_loaded(keep_alive: str = "30m") -> None:
@@ -118,17 +159,18 @@ def _tool_text(result: Any) -> str:
 class MemoryAgent(Agent):
     """One agent class for all three memory modes, so the benchmark compares only the memory path."""
 
-    def __init__(self, mode: str = MEMORY_MODE) -> None:
+    def __init__(self, mode: str = MEMORY_MODE, creds: tuple[str, str] | None = None,
+                 instructions_extra: str = "") -> None:
         self.mode = mode
         self._server: mcp.MCPServerStdio | None = None
         tools: list = []
         if mode == "tool":
-            tools = [memory_tools()]
+            tools = [memory_tools(creds)]
         elif mode == "prefetch":
-            self._server = memory_server()
+            self._server = memory_server(creds)
             tools = [self.write_memory_tool()]
         self.last_prefetch_ms: float | None = None
-        super().__init__(instructions=INSTRUCTIONS[mode], tools=tools)
+        super().__init__(instructions=INSTRUCTIONS[mode] + instructions_extra, tools=tools)
 
     # -- prefetch mode -------------------------------------------------------------------------
     async def _call(self, name: str, args: dict) -> str:
@@ -270,13 +312,62 @@ def prewarm(proc: JobProcess) -> None:
 server = AgentServer(setup_fnc=prewarm)
 
 
-@server.rtc_session()
+PHONE_RULES = """
+You are on a phone call. Audio is narrowband, so if you did not catch something, ask the caller to
+repeat it. When the caller says goodbye, say goodbye in one short sentence.
+"""
+
+
+def call_recorder(ctx: JobContext, session: AgentSession, agent: MemoryAgent, call: dict) -> None:
+    """Write one JSON file per call at hang-up: caller hash, duration, and the full transcript.
+    Per-turn latency for the same call is in data/turns.jsonl under run=<call id>."""
+
+    async def _save() -> None:
+        call["ended"] = time.time()
+        call["duration_s"] = round(call["ended"] - call["started"], 1)
+        call["mode"] = agent.mode
+        call["transcript"] = [
+            {"role": m.role, "text": m.text_content, "interrupted": bool(m.interrupted)}
+            for m in session.history.items
+            if getattr(m, "type", None) == "message" and m.text_content
+        ]
+        CALLS_DIR.mkdir(parents=True, exist_ok=True)
+        (CALLS_DIR / f"{call['id']}.json").write_text(
+            json.dumps(call, indent=2, ensure_ascii=False), encoding="utf-8")
+        log.info("call %s saved (%.0f s, %d messages)", call["id"], call["duration_s"],
+                 len(call["transcript"]))
+
+    ctx.add_shutdown_callback(_save)
+
+
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     session = build_session(ctx.proc.userdata["vad"])
-    agent = MemoryAgent()
-    turn_logger(session, agent)
+    if ctx.is_fake_job():  # console mode: local mic, the .env test account
+        agent = MemoryAgent()
+        turn_logger(session, agent)
+        await session.start(agent=agent, room=ctx.room, record=False)
+        await session.generate_reply(instructions="Greet the user in one short sentence.")
+        return
+
+    await ctx.connect()
+    participant = await ctx.wait_for_participant()
+    is_sip = participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    number = participant.attributes.get("sip.phoneNumber") if is_sip else None
+    creds = await asyncio.to_thread(caller_account, number) if number else None
+    started = time.time()
+    cid = caller_id(number) if number else None
+    call = {"id": time.strftime("%Y%m%d-%H%M%S", time.localtime(started)) + "-" + (cid or "web"),
+            "caller": cid, "kind": "phone" if number else "web", "started": started}
+    agent = MemoryAgent(PHONE_MEMORY_MODE if number else MEMORY_MODE, creds,
+                        PHONE_RULES if number else "")
+    state = turn_logger(session, agent, run=call["id"])
+    state["meta"] = {"caller": cid, "kind": call["kind"]}
+    call_recorder(ctx, session, agent, call)
     await session.start(agent=agent, room=ctx.room, record=False)
-    await session.generate_reply(instructions="Greet the user in one short sentence.")
+    await session.generate_reply(instructions=(
+        "Answer the phone in one short sentence: say you're the memory assistant and ask "
+        "how you can help."))
 
 
 if __name__ == "__main__":

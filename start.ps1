@@ -1,5 +1,7 @@
 # One-click start: memory DB + API (Docker), local speech server, then the voice agent console.
-# Usage (from this folder):  .\start.ps1
+# Usage (from this folder):  .\start.ps1          talk through your mic
+#                             .\start.ps1 -Phone   answer calls to the LiveKit number (LIVEKIT_* in .env)
+param([switch]$Phone)
 # Needs Docker Desktop running and Ollama installed. Everything stays on this machine.
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +46,11 @@ while (-not ((Test-Url 'http://127.0.0.1:8880/health') -and (Test-Url 'http://12
     Start-Sleep -Seconds 2
 }
 
-Write-Host '4/4 voice agent console - talk into your mic, Ctrl+C to quit'
 Set-Location $root
-uv run agent.py console
+if ($Phone) {
+    Write-Host '4/4 voice agent on the phone line - call your LiveKit number, Ctrl+C to quit'
+    uv run agent.py dev
+} else {
+    Write-Host '4/4 voice agent console - talk into your mic, Ctrl+C to quit'
+    uv run agent.py console
+}
